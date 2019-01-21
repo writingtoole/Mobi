@@ -1,2 +1,2 @@
 # Mobi
-Mobi book library
+A library to write MOBI-format ebooks
