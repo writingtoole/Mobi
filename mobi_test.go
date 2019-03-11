@@ -12,7 +12,7 @@ const bookName = "Alice's Adventures in Wonderland"
 func TestBasic(t *testing.T) {
 	b, err := Read(sampleFile)
 	if err != nil {
-		t.Errorf("Unable to open %q: %v", sampleFile, err)
+		t.Fatalf("Unable to open %q: %v", sampleFile, err)
 	}
 
 	// Did we decode the name right?
@@ -25,4 +25,8 @@ func TestBasic(t *testing.T) {
 		t.Errorf("Book contents error: expected trailing string </html>, have %v", string(b.Contents[len(b.Contents)-7:len(b.Contents)]))
 	}
 
+	// The sample book should have a single image.
+	if len(b.Images) != 1 {
+		t.Errorf("Book image count error: got %v, want 1", len(b.Images))
+	}
 }

@@ -18,7 +18,17 @@ type Mobi struct {
 	Name string
 	// The text contents of the book. MOBI books have only a single file of text in them.
 	Contents []byte
-	header   *mobiHeaderData
+	// The images in the book, in order. Note that the images aren't
+	// decoded when read, so it's possible the image data will be broken
+	// in some way.
+	Images     []*Image
+	header     *mobiHeader
+	headerID   *mobiHeaderID
+	headerData *mobiHeaderData
+}
+
+type Image struct {
+	Data []byte
 }
 
 // Compression types
@@ -52,7 +62,7 @@ const (
 	EncodingUTF8      = 65001
 )
 
-type header struct {
+type mobiHeader struct {
 	Compression    uint16
 	Unused         uint16
 	TextLength     uint32
@@ -138,6 +148,11 @@ func Parse(p *pdb.Pdb) (*Mobi, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Header parsing error: %v", err)
 	}
+	if m.headerData.FirstImage != 0 {
+		if err := m.decodeImages(p); err != nil {
+			return nil, fmt.Errorf("Image parsing error: %v", err)
+		}
+	}
 	return m, nil
 }
 
@@ -171,35 +186,33 @@ func reverseDecodeInt(b []byte) (int, int, int, error) {
 
 // parseHeader parses the book header data.
 func (m *Mobi) parseHeader(p *pdb.Pdb) error {
-	h := header{}
+	h := &mobiHeader{}
 	rd := p.Records[0].Data
 	b := bytes.NewReader(rd)
 
-	err := binary.Read(b, binary.BigEndian, &h)
+	err := binary.Read(b, binary.BigEndian, h)
 	if err != nil {
 		return err
 	}
+	m.header = h
 
-	mhi := mobiHeaderID{}
-	err = binary.Read(b, binary.BigEndian, &mhi)
+	mhi := &mobiHeaderID{}
+	err = binary.Read(b, binary.BigEndian, mhi)
 	if err != nil {
 		return err
 	}
+	m.headerID = mhi
 
 	endOffset := mhi.HeaderLength + 24
 	rawMobi := rd[24:endOffset]
 
 	mhd := &mobiHeaderData{}
-	m.header = mhd
-	if extra := mhdSize - len(rawMobi); extra > 0 {
-
-	}
-
 	mb := bytes.NewReader(rawMobi)
 	err = binary.Read(mb, binary.BigEndian, mhd)
 	if err != nil {
 		return fmt.Errorf("Error reading mhd: %v", err)
 	}
+	m.headerData = mhd
 
 	m.Name = string(rd[mhd.NameOffset : mhd.NameOffset+mhd.NameLength])
 
@@ -236,10 +249,10 @@ func (m *Mobi) trailStrip(p *pdb.Pdb, rec int) []byte {
 	if len(d) == 3 && bytes.Equal(d, []byte{0, 0, 0}) {
 		return []byte{}
 	}
-	if m.header.ExtraFlags != 0 {
+	if m.headerData.ExtraFlags != 0 {
 		for i := 15; i >= 0; i-- {
 			b := uint32(1 << uint(i))
-			if m.header.ExtraFlags&b != 0 {
+			if m.headerData.ExtraFlags&b != 0 {
 				extra := 0
 				switch i {
 				case 0:
@@ -260,4 +273,25 @@ func (m *Mobi) trailStrip(p *pdb.Pdb, rec int) []byte {
 		}
 	}
 	return d
+}
+
+func (m *Mobi) decodeImages(p *pdb.Pdb) error {
+	// Figure out where the images stop. It'd be nice if there was a
+	// "last image" entry, but there isn't.
+	maxImage := uint32(m.headerData.LastContentRecord)
+	if m.headerData.HuffmanRecordOffset != 0 && m.headerData.HuffmanRecordOffset <= maxImage {
+		maxImage = m.headerData.HuffmanRecordOffset - 1
+	}
+	if m.headerData.HuffmanTableOffset != 0 && m.headerData.HuffmanTableOffset <= maxImage {
+		maxImage = m.headerData.HuffmanTableOffset - 1
+	}
+	if m.headerData.DRMOffset != 0 && m.headerData.DRMOffset <= maxImage {
+		maxImage = m.headerData.DRMOffset - 1
+	}
+
+	for i := m.headerData.FirstImage; i <= maxImage; i++ {
+		m.Images = append(m.Images, &Image{Data: p.Records[i].Data})
+	}
+
+	return nil
 }
